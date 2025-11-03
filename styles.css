@@ -1,0 +1,156 @@
+:root {
+  --bg: #0b0f14;
+  --panel: #121923;
+  --text: #e6edf3;
+  --muted: #94a3b8;
+  --accent: #60a5fa;
+  --border: #1f2937;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+  color: var(--text);
+  background: linear-gradient(180deg, #0a0f15, #0b0f14 120px);
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(12, 18, 26, 0.8);
+  backdrop-filter: blur(6px);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.app-header h1 { font-size: 18px; margin: 0; }
+.spacer { flex: 1; }
+#toggle-theme { background: transparent; border: 1px solid var(--border); color: var(--text); padding: 6px 10px; border-radius: 8px; cursor: pointer; }
+
+.app-nav {
+  display: flex;
+  gap: 8px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.nav-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 8px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+.nav-btn.active { border-color: var(--accent); color: var(--accent); }
+
+.view-container { padding: 18px; max-width: 1200px; margin: 0 auto; }
+.view { display: none; }
+.view.active { display: block; }
+
+.grid.two { display: grid; grid-template-columns: 1fr; gap: 16px; margin-top: 16px; }
+@media (min-width: 860px) { .grid.two { grid-template-columns: 1fr 1fr; } }
+.grid.three { display: grid; grid-template-columns: 1fr; gap: 16px; }
+@media (min-width: 860px) { .grid.three { grid-template-columns: repeat(3, 1fr); } }
+.stat-value { font-size: 24px; font-weight: 700; margin-top: 8px; }
+.stat-value.positive { color: #22c55e; }
+.stat-value.negative { color: #ef4444; }
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 14px;
+}
+.card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.card h2, .card h3 { margin: 0; font-weight: 600; }
+
+.range-controls { display: flex; gap: 8px; }
+.range-btn { background: transparent; border: 1px solid var(--border); color: var(--text); padding: 6px 10px; border-radius: 8px; cursor: pointer; }
+.range-btn.active { border-color: var(--accent); color: var(--accent); }
+
+.form-grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
+.form-grid label { display: grid; gap: 6px; font-size: 14px; color: var(--muted); }
+.form-grid input, .form-grid select { background: transparent; color: var(--text); border: 1px solid var(--border); padding: 10px; border-radius: 8px; }
+.primary { background: var(--accent); color: #071018; border: none; padding: 10px 12px; border-radius: 10px; cursor: pointer; font-weight: 600; }
+
+/* Dropdown / select styling for dark theme
+   - Ensure the control and its option list use dark backgrounds and visible text.
+   - Provide better focus outline and hide native MS expand icon for a cleaner look. */
+select, .form-grid select, .transactions-list select {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 10px;
+  border-radius: 8px;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text) 50%), linear-gradient(135deg, var(--text) 50%, transparent 50%);
+  background-position: calc(100% - 18px) calc(1em + 2px), calc(100% - 13px) calc(1em + 2px);
+  background-size: 6px 6px, 6px 6px;
+  background-repeat: no-repeat;
+}
+
+/* Options within the native dropdown */
+select option, .form-grid select option {
+  background: var(--panel);
+  color: var(--text);
+}
+
+select:focus, .form-grid select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px rgba(96,165,250,0.08);
+}
+
+/* Hide the native expand arrow in some MS browsers (we use CSS arrow above) */
+select::-ms-expand { display: none; }
+
+canvas { width: 100%; }
+
+.recent-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.recent-list li { display: flex; justify-content: space-between; align-items: center; padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: rgba(255,255,255,0.02); }
+.recent-list .left { display: flex; gap: 10px; align-items: center; }
+.badge { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
+.badge.asset { border-color: #22c55e55; color: #22c55e; }
+.badge.liability { border-color: #ef444455; color: #ef4444; }
+.badge.income { border-color: #22c55e55; color: #22c55e; }
+.badge.expense { border-color: #ef444455; color: #ef4444; }
+.muted { color: var(--muted); font-size: 12px; }
+
+.items-list { display: grid; gap: 8px; }
+.item-row { display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: center; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: rgba(255,255,255,0.02); }
+.item-row .meta { display: flex; gap: 10px; align-items: center; flex: 1; }
+.item-row .meta > div { flex: 1; }
+.item-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.item-row > div:nth-child(2) { font-weight: 600; min-width: 80px; text-align: right; }
+.danger { background: transparent; border: 1px solid #ef4444; color: #ef4444; padding: 6px 10px; border-radius: 8px; cursor: pointer; }
+.secondary { background: transparent; border: 1px solid var(--border); color: var(--text); padding: 6px 10px; border-radius: 8px; cursor: pointer; }
+.item-details { margin-top: 8px; display: none; }
+.item-details.active { display: block; }
+.item-details textarea { width: 100%; min-height: 70px; background: transparent; color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px; }
+
+.modal { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 20px; }
+.modal-content { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 20px; max-width: 600px; width: 100%; max-height: 90vh; overflow-y: auto; }
+
+.transactions-list { display: grid; gap: 8px; }
+.transaction-row { display: grid; grid-template-columns: auto 1fr auto auto auto; gap: 12px; align-items: center; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: rgba(255,255,255,0.02); }
+.transaction-row .date { font-size: 12px; color: var(--muted); min-width: 80px; }
+.transaction-row .description { flex: 1; }
+.transaction-row .amount { font-weight: 600; min-width: 80px; text-align: right; }
+.transaction-row .amount.positive { color: #22c55e; }
+.transaction-row .amount.negative { color: #ef4444; }
+.transaction-row .category { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); min-width: 80px; text-align: center; }
+.transaction-row .actions { display: flex; gap: 4px; }
+.transaction-row .actions button { padding: 4px 8px; font-size: 12px; }
+
+table { width: 100%; border-collapse: collapse; }
+table th, table td { padding: 8px; border: 1px solid var(--border); text-align: left; }
+table th { background: rgba(255,255,255,0.05); font-weight: 600; }
+
+

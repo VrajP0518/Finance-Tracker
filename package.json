@@ -1,0 +1,13 @@
+{
+  "name": "finance-tracker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local finance tracker (development). Finnhub proxy for local API calls.",
+  "scripts": {
+    "start-proxy": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "node-fetch": "^2.6.7"
+  }
+}
