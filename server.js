@@ -70,6 +70,12 @@ app.get('/api/history', (req, res) => {
   proxyFetch(url, res);
 });
 
+// Lightweight health/ping endpoint so client can quickly check if proxy has API key configured
+app.get('/api/ping', (req, res) => {
+  if (!API_KEY) return res.status(200).json({ ok: false, message: 'FINNHUB_API_KEY not configured' });
+  return res.status(200).json({ ok: true });
+});
+
 app.listen(PORT, () => {
   console.log(`Finnhub proxy listening on http://localhost:${PORT}`);
 });

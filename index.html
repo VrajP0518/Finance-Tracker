@@ -16,8 +16,9 @@
 
     <nav class="app-nav">
       <button data-view="dashboard" class="nav-btn active">Dashboard</button>
-      <button data-view="items" class="nav-btn">Items</button>
-      <button data-view="transactions" class="nav-btn">Transactions</button>
+  <button data-view="items" class="nav-btn">Items</button>
+  <button data-view="stocks" class="nav-btn">Stocks</button>
+  <button data-view="transactions" class="nav-btn">Transactions</button>
       <button data-view="accounts" class="nav-btn">Accounts</button>
       <button data-view="settings" class="nav-btn">Settings</button>
     </nav>
@@ -133,6 +134,11 @@
           </div>
           <ul id="recent-list" class="recent-list"></ul>
         </div>
+
+        <div class="card" style="margin-top: 16px;">
+          <div class="card-header"><h3>Top Positions</h3></div>
+          <div id="dashboard-top-positions" style="padding:12px">No positions</div>
+        </div>
       </section>
 
       <section id="view-transactions" class="view">
@@ -230,6 +236,60 @@
         <div class="card">
           <div class="card-header"><h2>Accounts</h2></div>
           <p>Coming soon. Manage accounts and balances.</p>
+        </div>
+      </section>
+
+      <!-- Stocks / Portfolio view -->
+      <section id="view-stocks" class="view">
+        <div class="card">
+          <div class="card-header">
+            <h2>Stocks & Portfolio</h2>
+            <div style="display:flex; gap:8px; align-items:center;">
+              <input id="stock-search-input" type="text" placeholder="Search symbols (e.g. AAPL)" style="background: transparent; color: var(--text); border: 1px solid var(--border); padding: 8px; border-radius: 8px;" />
+              <button id="stock-search-btn" class="secondary">Search</button>
+              <span id="proxy-status" title="Proxy status" style="margin-left:8px; font-size:12px; color:var(--muted);">Proxy: unknown</span>
+            </div>
+            <div id="stock-search-result" style="margin-top:8px; color:var(--text);"></div>
+          </div>
+          <div style="margin-top:12px; display:grid; gap:12px;">
+            <div style="display:flex; gap:12px; align-items:center;">
+              <button id="build-history-btn" class="secondary">Build History</button>
+              <div class="muted" style="font-size:13px;">(Fetch historical prices for portfolio history chart — may take a few seconds)</div>
+            </div>
+            <div class="card" style="padding:12px;">
+              <h4>MY CONTRIBUTIONS</h4>
+              <canvas id="stocks-portfolio-chart" height="100"></canvas>
+            </div>
+            <form id="add-position-form" class="form-grid" style="grid-template-columns: 1fr 1fr 1fr; gap:8px; align-items:end;">
+              <label>
+                Symbol
+                <input id="position-symbol" type="text" placeholder="AAPL" required />
+              </label>
+              <label>
+                Shares
+                <input id="position-shares" type="number" step="0.0001" placeholder="1.5" required />
+              </label>
+              <label>
+                Avg Cost
+                <input id="position-avgcost" type="number" step="0.01" placeholder="150.00" required />
+              </label>
+              <label>
+                Account
+                <input id="position-account" type="text" placeholder="Broker" />
+              </label>
+              <div></div>
+              <div style="display:flex; gap:8px;">
+                <button type="submit" class="primary">Add Position</button>
+                <button type="button" id="refresh-prices" class="secondary">Refresh Prices</button>
+              </div>
+            </form>
+
+            <div>
+              <h4>Positions</h4>
+              <div id="positions-controls" style="margin-bottom:8px; display:flex; gap:8px; align-items:center;"></div>
+              <div id="positions-list" style="margin-top:8px;"></div>
+            </div>
+          </div>
         </div>
       </section>
 

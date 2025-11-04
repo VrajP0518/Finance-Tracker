@@ -1,7 +1,8 @@
 (function(){
   // ---- db.js ----
   const DB_NAME = 'finance-tracker';
-  const DB_VERSION = 2;
+  // Bump DB version to ensure new object stores (e.g., 'positions') are created on upgrade
+  const DB_VERSION = 3;
   let _db;
   function initDb(){
     return new Promise((resolve, reject)=>{
@@ -25,6 +26,10 @@
         if (!d.objectStoreNames.contains('categories')) {
           const store = d.createObjectStore('categories', { keyPath: 'id', autoIncrement: true });
           store.createIndex('by_name', 'name', { unique: true });
+        }
+        if (!d.objectStoreNames.contains('positions')) {
+          const store = d.createObjectStore('positions', { keyPath: 'id', autoIncrement: true });
+          store.createIndex('by_symbol', 'symbol');
         }
       };
       openReq.onsuccess = () => { _db = openReq.result; resolve(); };
@@ -158,6 +163,373 @@
     });
   }
 
+  // ---- Positions (stocks) ----
+  function addPosition({ symbol, shares, avgCost, account, addedDate, notes }){
+    return new Promise((resolve, reject)=>{
+      const tx = _db.transaction(['positions'], 'readwrite');
+      const data = {
+        symbol: (symbol || '').toUpperCase(),
+        shares: Number(shares),
+        avgCost: Number(avgCost),
+        account: account || 'General',
+        addedDate: addedDate || new Date().toISOString(),
+        notes: notes || ''
+      };
+      const req = tx.objectStore('positions').add(data);
+      req.onsuccess = () => resolve({ ...data, id: req.result });
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  function getAllPositions(){
+    return new Promise((resolve, reject)=>{
+      const tx = _db.transaction(['positions'], 'readonly');
+      const req = tx.objectStore('positions').getAll();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  function deletePosition(id){
+    return new Promise((resolve, reject)=>{
+      const tx = _db.transaction(['positions'], 'readwrite');
+      const req = tx.objectStore('positions').delete(id);
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  function updatePosition(id, updates){
+    return new Promise((resolve, reject)=>{
+      const tx = _db.transaction(['positions'], 'readwrite');
+      const store = tx.objectStore('positions');
+      const getReq = store.get(id);
+      getReq.onsuccess = () => {
+        const cur = getReq.result;
+        if (!cur) { resolve(); return; }
+        const next = { ...cur, ...updates };
+        const putReq = store.put(next);
+        putReq.onsuccess = () => resolve(next);
+        putReq.onerror = () => reject(putReq.error);
+      };
+      getReq.onerror = () => reject(getReq.error);
+    });
+  }
+
+  // in-memory cache for positions
+  let __positionsCache = [];
+  async function loadPositionsCache(){
+    const all = await getAllPositions();
+    __positionsCache = all || [];
+    console.log('Loaded', __positionsCache.length, 'positions');
+  }
+
+  function aggregatePositions(){
+    const bySym = new Map();
+    for (const p of __positionsCache){
+      const sym = p.symbol;
+      if (!bySym.has(sym)) bySym.set(sym, { symbol: sym, shares: 0, cost: 0, account: p.account });
+      const rec = bySym.get(sym);
+      rec.shares += Number(p.shares);
+      rec.cost += Number(p.shares) * Number(p.avgCost || 0);
+    }
+    const out = [];
+    for (const [k,v] of bySym.entries()){
+      v.avgCost = v.shares ? (v.cost / v.shares) : 0;
+      out.push(v);
+    }
+    return out;
+  }
+
+  async function renderTopPositionsForDashboard(){
+    const container = document.getElementById('dashboard-top-positions');
+    if (!container) return;
+    if (!__positionsCache || __positionsCache.length === 0){ container.innerHTML = '<div class="muted">No positions</div>'; return; }
+    // fetch latest quotes for top symbols
+    const agg = aggregatePositions();
+    const symbols = agg.map(a => a.symbol);
+    const quotes = {};
+    await Promise.all(symbols.map(async s => { try { quotes[s] = await fetchQuote(s); } catch (e) { quotes[s] = null; } }));
+    const enriched = agg.map(a => { const q = quotes[a.symbol]; const price = q && q.current != null ? q.current : null; const mv = price != null ? price * a.shares : a.shares * a.avgCost; return { ...a, price, mv }; }).sort((a,b)=> (b.mv||0)-(a.mv||0));
+    const top = enriched.slice(0,3);
+    const total = enriched.reduce((acc,x)=>acc + (x.mv||0),0);
+    container.innerHTML = `<div style="display:flex; gap:12px; align-items:center;"><div style="font-weight:700">Top Positions</div><div class="muted">Total ${formatCurrency(total)}</div></div>
+      <div style="margin-top:8px;">${top.map(t=> `<div style="display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px solid rgba(148,163,184,0.04);"><div><strong>${t.symbol}</strong> · ${t.shares} sh</div><div>${t.price!=null?formatCurrency(t.price):'—'} · ${formatCurrency(t.mv||0)}</div></div>`).join('')}</div>`;
+  }
+
+  // Build positions history by fetching monthly candles for each symbol and composing a monthly series of market value
+  let __historyCache = {};
+  let stocksChart;
+  let __proxyPollInterval = null;
+  async function buildPositionsHistory(){
+    if (!__positionsCache || __positionsCache.length === 0) throw new Error('No positions');
+    // aggregate positions
+    const agg = aggregatePositions();
+    const symbols = agg.map(a => a.symbol);
+    // Determine date range: earliest position addedDate or now - 24 months fallback
+    const addedDates = __positionsCache.map(p => new Date(p.addedDate || p.added || new Date()));
+    const earliest = addedDates.length ? new Date(Math.min(...addedDates.map(d=>d.getTime()))) : new Date();
+    const start = new Date(earliest.getFullYear(), earliest.getMonth(), 1);
+    const now = new Date();
+    const months = [];
+    const cursor = new Date(start.getFullYear(), start.getMonth(), 1);
+    while (cursor <= now){ months.push(`${cursor.getFullYear()}-${String(cursor.getMonth()+1).padStart(2,'0')}-01`); cursor.setMonth(cursor.getMonth()+1); }
+    // For each symbol, fetch monthly candles from start to now (resolution=M) and store close values by month
+    for (const s of symbols){
+      try {
+        // from/to unix timestamps
+        const from = Math.floor(new Date(start.getFullYear(), start.getMonth(), 1).getTime()/1000);
+        const to = Math.floor(now.getTime()/1000);
+        const res = await apiFetch(`/api/history?symbol=${encodeURIComponent(s)}&from=${from}&to=${to}&resolution=M`);
+        if (res && res.s === 'ok' && Array.isArray(res.c)){
+          // build map of month->close using res.t (unix) and res.c
+          const map = {};
+          for (let i=0;i<res.t.length;i++){ const dt = new Date(res.t[i]*1000); const month = `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-01`; map[month] = res.c[i]; }
+          __historyCache[s] = map;
+        } else {
+          __historyCache[s] = {};
+        }
+      } catch (e){ console.warn('History fetch failed for', s, e); __historyCache[s] = {}; }
+    }
+    // Compose portfolio value by month
+    const series = months.map(month => {
+      let tot = 0;
+      for (const a of agg){
+        const sym = a.symbol;
+        const price = (__historyCache[sym] && __historyCache[sym][month] != null) ? __historyCache[sym][month] : (a.avgCost || 0);
+        tot += price * a.shares;
+      }
+      return { month, value: tot };
+    });
+    // Render on stocksChart (if available)
+    if (stocksChart){ stocksChart.data.labels = series.map(s=>s.month); stocksChart.data.datasets[0].data = series.map(s=>s.value); stocksChart.update(); }
+    // Update dashboard top positions too
+    try { renderTopPositionsForDashboard(); } catch (e){}
+  }
+
+  // Helper to call local proxy for quotes/search/history
+  async function apiFetch(path){
+    try {
+      const r = await fetch(path);
+      if (!r.ok) throw new Error('Network response was not ok');
+      return await r.json();
+    } catch (err){
+      console.error('apiFetch error', err);
+      return null;
+    }
+  }
+
+  async function fetchQuote(symbol){
+    if (!symbol) return null;
+    const s = symbol.toUpperCase();
+    const res = await apiFetch(`/api/quote?symbol=${encodeURIComponent(s)}`);
+    // Finnhub returns {c: current, h: high, l: low, o: open, pc: prevClose, t: timestamp}
+    if (!res) return null;
+    return {
+      current: res.c,
+      high: res.h,
+      low: res.l,
+      open: res.o,
+      prevClose: res.pc,
+      timestamp: res.t
+    };
+  }
+
+  function renderStockSearchResult(symbol, quote){
+    const container = document.getElementById('stock-search-result');
+    if (!container) return;
+    if (!quote) {
+      container.innerHTML = `<div class="muted">No quote available for ${symbol}</div>`;
+      return;
+    }
+    const change = quote.current != null && quote.prevClose != null ? (quote.current - quote.prevClose) : null;
+    const pct = change != null && quote.prevClose ? (change / quote.prevClose) * 100 : null;
+    container.innerHTML = `
+      <div style="display:flex; gap:12px; align-items:center;">
+        <div><strong style="font-size:16px">${symbol}</strong></div>
+        <div>${quote.current != null ? formatCurrency(quote.current) : '—'}</div>
+        <div class="muted">${quote.prevClose != null ? `Prev ${formatCurrency(quote.prevClose)}` : ''}</div>
+        <div style="color:${(change||0) >= 0 ? '#22c55e' : '#ef4444'}; font-weight:600;">${change != null ? (change >=0 ? '+' : '') + formatCurrency(change) : ''} ${pct != null ? `(${pct.toFixed(2)}%)` : ''}</div>
+      </div>`;
+  }
+
+  // Render a list of search candidates with live prices and an Add button
+  function renderSearchResults(results){
+    const container = document.getElementById('stock-search-result');
+    if (!container) return;
+    if (!results || results.length === 0){ container.innerHTML = '<div class="muted">No results</div>'; return; }
+    container.innerHTML = results.map(r => {
+      const symbol = r.symbol || r.displaySymbol || '';
+      const name = r.description || r.displaySymbol || '';
+      const priceText = r.price != null ? formatCurrency(r.price) : '—';
+      return `<div class="search-row" data-symbol="${symbol}" style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid rgba(148,163,184,0.05);">
+        <div style="display:flex; gap:12px; align-items:center;"><div><strong>${symbol}</strong></div><div class="muted" style="font-size:13px;">${name}</div></div>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <div style="min-width:80px; text-align:right;">${priceText}</div>
+          <button class="secondary" data-action="choose">Use</button>
+        </div>
+      </div>`;
+    }).join('');
+    // Attach handlers for Use buttons
+    container.querySelectorAll('[data-action="choose"]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const row = e.target.closest('.search-row');
+        if (!row) return;
+        const sym = row.getAttribute('data-symbol');
+        const input = document.getElementById('position-symbol');
+        if (input) input.value = sym;
+        // Optionally focus shares field
+        const sharesInput = document.getElementById('position-shares'); if (sharesInput) sharesInput.focus();
+      });
+    });
+  }
+
+  // Check proxy health (lightweight) and update status UI
+  async function checkProxyStatus(){
+    const el = document.getElementById('proxy-status');
+    if (!el) return;
+    try {
+      const res = await apiFetch('/api/ping');
+      if (res && res.ok) { el.textContent = 'Proxy: OK'; el.style.color = '#86efac'; }
+      else { el.textContent = 'Proxy: no key'; el.style.color = '#f97316'; }
+    } catch (err){ el.textContent = 'Proxy: error'; el.style.color = '#ef4444'; }
+  }
+
+  function renderPositionsList(){
+    const container = document.getElementById('positions-list');
+    if (!container) return;
+    if (!__positionsCache || __positionsCache.length === 0) {
+      container.innerHTML = '<p class="muted">No positions yet. Add one above.</p>';
+      return;
+    }
+    // For each position fetch latest quote (parallel)
+    container.innerHTML = '<p class="muted">Loading prices...</p>';
+    Promise.all(__positionsCache.map(async (p) => {
+      const q = await fetchQuote(p.symbol);
+      const latest = q && q.current ? q.current : null;
+      const marketValue = latest ? (p.shares * latest) : null;
+      return { p, latest, marketValue };
+    })).then(items => {
+      // Build a table-like output sorted by market value desc
+      const sorted = items.slice().sort((a,b) => (b.marketValue || 0) - (a.marketValue || 0));
+      container.innerHTML = `
+        <div style="display:grid; grid-template-columns: 1fr 120px 120px 140px; gap:12px; font-weight:600; margin-bottom:8px;">
+          <div>Position</div><div>Price</div><div>Market Value</div><div>P/L</div>
+        </div>
+        ${sorted.map(it => {
+          const p = it.p;
+          const latestText = it.latest != null ? formatCurrency(it.latest) : '—';
+          const mvText = it.marketValue != null ? formatCurrency(it.marketValue) : '—';
+          const cost = p.shares * (p.avgCost || 0);
+          const pl = (it.marketValue != null ? it.marketValue : 0) - cost;
+          const plText = formatCurrency(pl);
+          const plClass = pl >= 0 ? 'positive' : 'negative';
+          return `
+            <div class="item-row" data-id="${p.id}" style="display:grid; grid-template-columns: 1fr 120px 120px 140px; gap:12px; align-items:center; padding:8px 0; border-bottom:1px solid rgba(148,163,184,0.04);">
+              <div style="display:flex; gap:12px; align-items:center;"><span class="badge">${p.symbol}</span><div><div><strong>${p.symbol}</strong> · ${p.shares} sh</div><div class="muted">Avg ${formatCurrency(p.avgCost)} · ${p.account}</div></div></div>
+              <div style="text-align:right">${latestText}</div>
+              <div style="text-align:right">${mvText}</div>
+              <div style="display:flex; gap:8px; align-items:center; justify-content:flex-end;"><div class="${plClass}">${plText}</div><div><button class="secondary" data-action="refresh">↻</button> <button class="danger" data-action="delete">Delete</button></div></div>
+            </div>`;
+        }).join('')}
+      `;
+      // Attach handlers
+      container.querySelectorAll('.item-row').forEach(row => {
+        const id = Number(row.getAttribute('data-id'));
+        row.querySelector('[data-action="delete"]').addEventListener('click', async () => {
+          if (!confirm('Delete this position?')) return;
+          await deletePosition(id);
+          __positionsCache = __positionsCache.filter(x => x.id !== id);
+          renderPositionsList();
+          showToast('Deleted');
+        });
+        row.querySelector('[data-action="refresh"]').addEventListener('click', async () => {
+          renderPositionsList();
+        });
+      });
+    }).catch(err => {
+      console.error('Render positions failed', err);
+      container.innerHTML = '<p class="muted">Failed to load prices</p>';
+    });
+  }
+
+  function initStocksPage(){
+    const form = document.getElementById('add-position-form');
+    const searchInput = document.getElementById('stock-search-input');
+    const searchBtn = document.getElementById('stock-search-btn');
+    const refreshBtn = document.getElementById('refresh-prices');
+    if (form) {
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const sym = document.getElementById('position-symbol').value.trim().toUpperCase();
+        const shares = parseFloat(document.getElementById('position-shares').value);
+        const avg = parseFloat(document.getElementById('position-avgcost').value);
+        const account = document.getElementById('position-account').value.trim() || 'General';
+        if (!sym || !Number.isFinite(shares) || !Number.isFinite(avg)) { showToast('Please fill required fields'); return; }
+        try {
+          const saved = await addPosition({ symbol: sym, shares, avgCost: avg, account });
+          __positionsCache.push(saved);
+          renderPositionsList();
+          form.reset();
+          showToast('Position added');
+        } catch (err) {
+          console.error('Add position failed', err);
+          showToast('Add failed');
+        }
+      });
+    }
+    if (searchBtn && searchInput) {
+      searchBtn.addEventListener('click', async () => {
+        const q = searchInput.value.trim();
+        if (!q) return;
+        // check proxy quickly
+        await checkProxyStatus();
+        const res = await apiFetch(`/api/search?q=${encodeURIComponent(q)}`);
+        if (!res || !res.result || !Array.isArray(res.result) || res.result.length === 0) { showToast('No results'); renderSearchResults([]); return; }
+        const choices = res.result.slice(0,5);
+        // fetch quotes for each candidate in parallel to show prices inline
+        const withPrices = await Promise.all(choices.map(async (r) => {
+          const symbol = (r.symbol || r.displaySymbol || '').toUpperCase();
+          const qres = await fetchQuote(symbol).catch(()=>null);
+          return { symbol, description: r.description || r.displaySymbol || '', price: qres && qres.current != null ? qres.current : null };
+        }));
+        // normalize results for renderer
+        const norm = withPrices.map(w => ({ symbol: w.symbol, displaySymbol: w.symbol, description: w.description, price: w.price }));
+        renderSearchResults(norm);
+      });
+    }
+    if (refreshBtn) refreshBtn.addEventListener('click', () => renderPositionsList());
+    renderPositionsList();
+    // Render dashboard top positions small widget when stocks page loads
+    try { renderTopPositionsForDashboard(); } catch (e) { /* ignore */ }
+
+    // Setup portfolio chart in Stocks page
+    try {
+      const ctx = document.getElementById('stocks-portfolio-chart');
+      if (ctx) {
+        stocksChart = new Chart(ctx.getContext('2d'), {
+          type: 'line',
+          data: { labels: [], datasets: [{ label: 'Positions Value', data: [], borderColor: '#34d399', backgroundColor: 'rgba(52,211,153,0.12)', tension: 0.25, fill: true, pointRadius: 0 }] },
+          options: { responsive: true, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx) => formatCurrency(ctx.parsed.y) } } }, scales: { x: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(148,163,184,0.06)' } }, y: { ticks: { color: '#94a3b8', callback: (v)=>formatShortCurrency(v) }, grid: { color: 'rgba(148,163,184,0.06)' } } } }
+        });
+      }
+    } catch (e) { console.warn('Stocks chart init failed', e); }
+
+    // Wire build history button
+    const buildBtn = document.getElementById('build-history-btn');
+    if (buildBtn) buildBtn.addEventListener('click', async () => {
+      buildBtn.textContent = 'Building...'; buildBtn.disabled = true;
+      try { await buildPositionsHistory(); showToast('History built'); } catch (e) { console.error(e); showToast('History failed'); }
+      buildBtn.textContent = 'Build History'; buildBtn.disabled = false;
+    });
+    // Start proxy health polling (every 30s)
+    try {
+      checkProxyStatus();
+      if (__proxyPollInterval) clearInterval(__proxyPollInterval);
+      __proxyPollInterval = setInterval(checkProxyStatus, 30_000);
+    } catch (e) { /* ignore */ }
+  }
+
   // ---- in-memory cache for immediate UI updates ----
   let __valsCache = [];
   async function loadCacheFromDb(){ 
@@ -223,7 +595,95 @@
       console.log('Latest snapshot:', __snapshotsCache[__snapshotsCache.length - 1]);
     }
     await writeSnapshots(__snapshotsCache);
+    // Enrich snapshots with positions historical market values (monthly) where possible
+    try {
+      await enrichSnapshotsWithPositionsHistory();
+    } catch (e) { console.warn('Positions history enrichment failed', e); }
+    // Incorporate current positions market value into the latest snapshot (real-time)
+    try {
+      await incorporatePositionsIntoSnapshots();
+    } catch (e) { console.warn('Positions incorporation failed', e); }
     renderChartFromCache();
+  }
+
+  // Sum positions market value using latest quotes and apply to latest snapshot
+  async function incorporatePositionsIntoSnapshots(){
+    if (!__snapshotsCache || __snapshotsCache.length === 0) return;
+    if (!__positionsCache || __positionsCache.length === 0) return;
+    // fetch latest quotes for all unique symbols
+    const symbols = [...new Set(__positionsCache.map(p => p.symbol))];
+    const quotes = {};
+    await Promise.all(symbols.map(async (s) => { try { const q = await fetchQuote(s); quotes[s] = q; } catch (e) { quotes[s] = null; } }));
+    const latest = __snapshotsCache[__snapshotsCache.length - 1];
+    let positionsValue = 0;
+    for (const p of __positionsCache){
+      const q = quotes[p.symbol];
+      const price = q && q.current != null ? q.current : null;
+      const mv = price != null ? (p.shares * price) : (p.shares * (p.avgCost || 0));
+      positionsValue += mv;
+    }
+    // If snapshots were previously enriched, respect baseAssets; otherwise treat existing assets as base
+    const base = latest.baseAssets != null ? latest.baseAssets : (latest.assets - (latest.positionsValue || 0));
+    latest.baseAssets = base;
+    latest.positionsValue = positionsValue;
+    latest.assets = (base || 0) + positionsValue;
+    latest.netWorth = latest.assets - (latest.liabilities || 0);
+    // Store a helper field for UI
+    // Update stats display and write snapshots again
+    updateStatsDisplay();
+    await writeSnapshots(__snapshotsCache);
+  }
+
+  // Enrich all snapshots with historical positions market value using monthly candles
+  async function enrichSnapshotsWithPositionsHistory(){
+    if (!__snapshotsCache || __snapshotsCache.length === 0) return;
+    if (!__positionsCache || __positionsCache.length === 0) return;
+    const agg = aggregatePositions();
+    if (!agg || agg.length === 0) return;
+    // Cap symbols to avoid excessive calls; pick top by cost
+    const capped = agg.slice().sort((a,b)=> (b.shares*(b.avgCost||0)) - (a.shares*(a.avgCost||0))).slice(0, 12);
+    const symbols = capped.map(a => a.symbol);
+    // Determine date range from snapshots
+    const months = __snapshotsCache.map(s => s.date).sort();
+    const startMonth = months[0];
+    const endMonth = months[months.length-1];
+    const startDate = new Date(startMonth);
+    const endDate = new Date(endMonth);
+    const from = Math.floor(new Date(startDate.getFullYear(), startDate.getMonth(), 1).getTime() / 1000);
+    const to = Math.floor(new Date(endDate.getFullYear(), endDate.getMonth()+1, 0).getTime() / 1000);
+    // Fetch monthly candles for each symbol
+    for (const s of symbols){
+      try {
+        const res = await apiFetch(`/api/history?symbol=${encodeURIComponent(s)}&from=${from}&to=${to}&resolution=M`);
+        if (res && res.s === 'ok' && Array.isArray(res.t) && Array.isArray(res.c)){
+          const map = {};
+          for (let i=0;i<res.t.length;i++){ const dt = new Date(res.t[i]*1000); const month = `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-01`; map[month] = res.c[i]; }
+          __historyCache = __historyCache || {};
+          __historyCache[s] = map;
+        } else {
+          __historyCache = __historyCache || {};
+          __historyCache[s] = {};
+        }
+      } catch (e){ console.warn('History fetch failed for', s, e); __historyCache = __historyCache || {}; __historyCache[s] = {}; }
+    }
+    // For each snapshot month, compute positions value
+    for (const snap of __snapshotsCache){
+      const month = snap.date;
+      // store baseAssets if not present
+      if (snap.baseAssets == null) snap.baseAssets = snap.assets;
+      let positionsValue = 0;
+      for (const a of capped){
+        const sym = a.symbol;
+        const shares = a.shares || 0;
+        const price = (__historyCache[sym] && __historyCache[sym][month] != null) ? __historyCache[sym][month] : (a.avgCost || 0);
+        positionsValue += (price || 0) * shares;
+      }
+      snap.positionsValue = positionsValue;
+      snap.assets = (snap.baseAssets || 0) + positionsValue;
+      snap.netWorth = snap.assets - (snap.liabilities || 0);
+    }
+    // persist updated snapshots
+    await writeSnapshots(__snapshotsCache);
   }
   async function renderFromSnapshotsCached(){
     __snapshotsCache = await readSnapshots();
@@ -251,8 +711,12 @@
     const nwEl = document.getElementById('current-networth');
     const assetsEl = document.getElementById('total-assets');
     const liabEl = document.getElementById('total-liabilities');
-    if (nwEl) nwEl.textContent = formatCurrency(latest.netWorth);
-    if (assetsEl) assetsEl.textContent = formatCurrency(latest.assets);
+    // If latest includes positionsValue, show both assets and positions (positions included in assets for net worth)
+    if (nwEl) nwEl.textContent = formatCurrency(latest.netWorth || 0);
+    if (assetsEl) {
+      const posVal = latest.positionsValue ? ` (pos ${formatCurrency(latest.positionsValue)})` : '';
+      assetsEl.textContent = formatCurrency(latest.assets || 0) + posVal;
+    }
     if (liabEl) liabEl.textContent = formatCurrency(latest.liabilities);
   }
   function computeMonthlySnapshots(valuations, transactions = []){
@@ -345,7 +809,7 @@
   }
 
   // ---- app.js ----
-  const views = [ 'dashboard', 'items', 'transactions', 'accounts', 'settings' ];
+  const views = [ 'dashboard', 'items', 'stocks', 'transactions', 'accounts', 'settings' ];
   function selectView(id){
     for (const v of views){ const el = document.getElementById(`view-${v}`); if (el) el.classList.toggle('active', v === id); }
     for (const btn of document.querySelectorAll('.nav-btn')) btn.classList.toggle('active', btn.dataset.view === id);
@@ -934,6 +1398,7 @@
     await initNetWorthChart();
     await loadCacheFromDb();
     await loadTransactionsCache();
+  await loadPositionsCache();
     if (__valsCache.length === 0){
       const now = new Date();
       const monthsBack = (n) => new Date(now.getFullYear(), now.getMonth() - n, 1);
@@ -953,6 +1418,8 @@
     await renderRecent();
     renderItemsList(); // Pre-render items list
     updateCategoryDatalist(); // Initialize category datalist
+    // initialize stocks page
+    try { initStocksPage(); } catch (e) { console.warn('Stocks init skipped', e); }
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bootstrap); else bootstrap();
 })();
