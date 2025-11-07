@@ -325,13 +325,15 @@
     const res = await apiFetch(`/api/quote?symbol=${encodeURIComponent(s)}`);
     // Finnhub returns {c: current, h: high, l: low, o: open, pc: prevClose, t: timestamp}
     if (!res) return null;
+    // handle unexpected shapes
+    if (res.error) return null;
     return {
-      current: res.c,
-      high: res.h,
-      low: res.l,
-      open: res.o,
-      prevClose: res.pc,
-      timestamp: res.t
+      current: res.c != null ? res.c : (res.current || null),
+      high: res.h != null ? res.h : (res.high || null),
+      low: res.l != null ? res.l : (res.low || null),
+      open: res.o != null ? res.o : (res.open || null),
+      prevClose: res.pc != null ? res.pc : (res.prevClose || null),
+      timestamp: res.t || res.timestamp || null
     };
   }
 
@@ -340,6 +342,8 @@
     if (!container) return;
     if (!quote) {
       container.innerHTML = `<div class="muted">No quote available for ${symbol}</div>`;
+      // clear any previous chart
+      const old = container.querySelector('canvas[data-symbol-chart]'); if (old) old.remove();
       return;
     }
     const change = quote.current != null && quote.prevClose != null ? (quote.current - quote.prevClose) : null;
@@ -350,7 +354,55 @@
         <div>${quote.current != null ? formatCurrency(quote.current) : '—'}</div>
         <div class="muted">${quote.prevClose != null ? `Prev ${formatCurrency(quote.prevClose)}` : ''}</div>
         <div style="color:${(change||0) >= 0 ? '#22c55e' : '#ef4444'}; font-weight:600;">${change != null ? (change >=0 ? '+' : '') + formatCurrency(change) : ''} ${pct != null ? `(${pct.toFixed(2)}%)` : ''}</div>
-      </div>`;
+      </div>
+      <div id="stock-chart-container" style="margin-top:8px;"></div>`;
+    // prepare canvas for chart rendering
+    const chartContainer = document.getElementById('stock-chart-container');
+    if (chartContainer) {
+      chartContainer.innerHTML = `<canvas data-symbol-chart="${symbol}" id="chart-${symbol}" height="160"></canvas>`;
+    }
+  }
+
+  // Fetch daily history for symbol for the last `days` days and return array of {date, close}
+  async function fetchDailyHistory(symbol, days = 90){
+    const now = Math.floor(Date.now()/1000);
+    const from = Math.floor((Date.now() - (days * 24*60*60)) / 1000);
+    try {
+      const res = await apiFetch(`/api/history?symbol=${encodeURIComponent(symbol)}&from=${from}&to=${now}&resolution=D`);
+      if (!res || res.s !== 'ok' || !Array.isArray(res.t) || !Array.isArray(res.c)) return null;
+      const out = [];
+      for (let i=0;i<res.t.length;i++){ out.push({ date: new Date(res.t[i]*1000).toISOString().slice(0,10), close: res.c[i] }); }
+      return out;
+    } catch (e){ console.error('fetchDailyHistory failed', e); return null; }
+  }
+
+  // Render a Chart.js line chart for the given symbol into the stock-chart container created by renderStockSearchResult
+  async function renderStockChart(symbol, days = 90){
+    const canvas = document.getElementById(`chart-${symbol}`);
+    const container = document.getElementById('stock-chart-container');
+    if (!container) return; // nothing to render into
+    if (!canvas){
+      // if renderStockSearchResult not called, create canvas
+      container.innerHTML = `<canvas data-symbol-chart="${symbol}" id="chart-${symbol}" height="160"></canvas>`;
+    }
+    const c = document.getElementById(`chart-${symbol}`);
+    if (!c) return;
+    // fetch history
+    const hist = await fetchDailyHistory(symbol, days);
+    if (!hist || hist.length === 0){ container.innerHTML += '<div class="muted">No historical data available</div>'; return; }
+    // prepare data
+    const labels = hist.map(h => h.date);
+    const values = hist.map(h => h.close);
+    // create or reuse chart instance stored on element
+    try {
+      if (c.__chart) { c.__chart.data.labels = labels; c.__chart.data.datasets[0].data = values; c.__chart.update('none'); return; }
+      const ctx = c.getContext('2d');
+      c.__chart = new Chart(ctx, {
+        type: 'line',
+        data: { labels, datasets: [{ label: symbol, data: values, borderColor: '#60a5fa', backgroundColor: 'rgba(96,165,250,0.12)', tension: 0.25, fill: true, pointRadius: 0 }] },
+        options: { responsive: true, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx) => formatCurrency(ctx.parsed.y) } } }, scales: { x: { ticks: { color: '#94a3b8', callback: (val, idx) => formatMonthLabel(labels[idx]) }, grid: { color: 'rgba(148,163,184,0.12)' } }, y: { ticks: { color: '#94a3b8', callback: (v)=>formatShortCurrency(v) }, grid: { color: 'rgba(148,163,184,0.08)' } } } }
+      });
+    } catch (e){ console.error('renderStockChart failed', e); }
   }
 
   // Render a list of search candidates with live prices and an Add button
@@ -361,28 +413,91 @@
     container.innerHTML = results.map(r => {
       const symbol = r.symbol || r.displaySymbol || '';
       const name = r.description || r.displaySymbol || '';
-      const priceText = r.price != null ? formatCurrency(r.price) : '—';
+      const priceText = r.price != null ? formatCurrency(r.price) : '<span class="muted">Loading</span>';
       return `<div class="search-row" data-symbol="${symbol}" style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid rgba(148,163,184,0.05);">
-        <div style="display:flex; gap:12px; align-items:center;"><div><strong>${symbol}</strong></div><div class="muted" style="font-size:13px;">${name}</div></div>
+        <div style="display:flex; gap:12px; align-items:center;"><div style="cursor:pointer" data-action="view"><strong>${symbol}</strong></div><div class="muted" style="font-size:13px;">${name}</div></div>
         <div style="display:flex; gap:8px; align-items:center;">
-          <div style="min-width:80px; text-align:right;">${priceText}</div>
+          <div style="min-width:120px; text-align:right;">${priceText}</div>
           <button class="secondary" data-action="choose">Use</button>
+          <button class="secondary" data-action="view-btn">View</button>
         </div>
       </div>`;
     }).join('');
-    // Attach handlers for Use buttons
+    // Attach handlers for Use and View buttons
     container.querySelectorAll('[data-action="choose"]').forEach(btn => {
-      btn.addEventListener('click', (e) => {
+      btn.addEventListener('click', async (e) => {
         const row = e.target.closest('.search-row');
         if (!row) return;
         const sym = row.getAttribute('data-symbol');
-        const input = document.getElementById('position-symbol');
-        if (input) input.value = sym;
-        // Optionally focus shares field
-        const sharesInput = document.getElementById('position-shares'); if (sharesInput) sharesInput.focus();
+        // try to get a current quote to suggest avg cost
+        let suggested = null;
+        try { const q = await fetchQuote(sym); if (q && q.c != null) suggested = q.c; else if (q && q.current) suggested = q.current; } catch (er) { /*ignore*/ }
+        openAddFromSearchModal(sym, suggested);
       });
     });
+    container.querySelectorAll('[data-action="view-btn"]').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        const row = e.target.closest('.search-row'); if (!row) return; const sym = row.getAttribute('data-symbol');
+        // Show detailed quote + chart
+        const quote = await fetchQuote(sym).catch(()=>null);
+        renderStockSearchResult(sym, quote);
+        // render chart for last 90 days
+        try { await renderStockChart(sym, 90); } catch (err) { console.warn('Chart render failed', err); }
+      });
+    });
+    // Also allow clicking the symbol text to view
+    container.querySelectorAll('[data-action="view"]').forEach(el => el.addEventListener('click', async (e) => { const row = e.target.closest('.search-row'); if (!row) return; const sym = row.getAttribute('data-symbol'); const quote = await fetchQuote(sym).catch(()=>null); renderStockSearchResult(sym, quote); try { await renderStockChart(sym, 90); } catch (err) { console.warn('Chart render failed', err); } }));
   }
+
+  // ---- Add-from-search modal handling ----
+  const __profileCache = {};
+  async function fetchProfile(symbol){
+    if (!symbol) return null;
+    const s = symbol.toUpperCase();
+    if (__profileCache[s]) return __profileCache[s];
+    try {
+      const res = await apiFetch(`/api/profile?symbol=${encodeURIComponent(s)}`);
+      __profileCache[s] = res || null;
+      return __profileCache[s];
+    } catch (e) { console.warn('fetchProfile failed', e); __profileCache[s] = null; return null; }
+  }
+
+  function openAddFromSearchModal(symbol, suggestedPrice){
+    const modal = document.getElementById('add-from-search-modal');
+    if (!modal) return;
+    document.getElementById('afs-symbol').value = symbol;
+    document.getElementById('afs-avgcost').value = suggestedPrice != null ? String(suggestedPrice) : '';
+    document.getElementById('afs-shares').value = '1';
+    document.getElementById('afs-account').value = 'Broker';
+    modal.style.display = 'flex';
+  }
+
+  function closeAddFromSearchModal(){
+    const modal = document.getElementById('add-from-search-modal'); if (!modal) return; modal.style.display = 'none';
+  }
+
+  // Wire modal buttons
+  try {
+    const closeBtn = document.getElementById('close-add-from-search'); if (closeBtn) closeBtn.addEventListener('click', () => closeAddFromSearchModal());
+    const cancelBtn = document.getElementById('afs-cancel'); if (cancelBtn) cancelBtn.addEventListener('click', () => closeAddFromSearchModal());
+    const afsForm = document.getElementById('add-from-search-form'); if (afsForm) afsForm.addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      const sym = document.getElementById('afs-symbol').value.trim().toUpperCase();
+      const shares = parseFloat(document.getElementById('afs-shares').value);
+      const avg = parseFloat(document.getElementById('afs-avgcost').value);
+      const account = document.getElementById('afs-account').value.trim() || 'Broker';
+      if (!sym || !Number.isFinite(shares) || !Number.isFinite(avg)) { showToast('Please fill required fields'); return; }
+      try {
+        const saved = await addPosition({ symbol: sym, shares, avgCost: avg, account });
+        __positionsCache.push(saved);
+        closeAddFromSearchModal();
+        renderPositionsList();
+        await recomputeAndRenderNetWorth();
+        renderTopPositionsForDashboard();
+        showToast('Position added');
+      } catch (err){ console.error('Add from search failed', err); showToast('Add failed'); }
+    });
+  } catch (e) { console.warn('Modal wiring failed', e); }
 
   // Check proxy health (lightweight) and update status UI
   async function checkProxyStatus(){
@@ -402,55 +517,121 @@
       container.innerHTML = '<p class="muted">No positions yet. Add one above.</p>';
       return;
     }
-    // For each position fetch latest quote (parallel)
-    container.innerHTML = '<p class="muted">Loading prices...</p>';
-    Promise.all(__positionsCache.map(async (p) => {
-      const q = await fetchQuote(p.symbol);
-      const latest = q && q.current ? q.current : null;
-      const marketValue = latest ? (p.shares * latest) : null;
-      return { p, latest, marketValue };
-    })).then(items => {
-      // Build a table-like output sorted by market value desc
-      const sorted = items.slice().sort((a,b) => (b.marketValue || 0) - (a.marketValue || 0));
-      container.innerHTML = `
-        <div style="display:grid; grid-template-columns: 1fr 120px 120px 140px; gap:12px; font-weight:600; margin-bottom:8px;">
-          <div>Position</div><div>Price</div><div>Market Value</div><div>P/L</div>
+    // Render rows immediately with placeholders, then fetch prices and update each row
+    const rowsHtml = `
+      <div style="display:grid; grid-template-columns: 1fr 120px 120px 140px; gap:12px; font-weight:600; margin-bottom:8px;">
+        <div>Position</div><div>Price</div><div>Market Value</div><div>P/L</div>
+      </div>
+      ${__positionsCache.map(p => `
+        <div class="item-row" data-id="${p.id}" data-symbol="${p.symbol}" style="display:grid; grid-template-columns: 1fr 120px 120px 140px; gap:12px; align-items:center; padding:8px 0; border-bottom:1px solid rgba(148,163,184,0.04);">
+          <div style="display:flex; gap:12px; align-items:center;"><span class="badge">${p.symbol}</span><div><div><strong>${p.symbol}</strong> · ${p.shares} sh</div><div class="muted">Avg ${formatCurrency(p.avgCost)} · ${p.account}</div></div></div>
+          <div class="pos-price" style="text-align:right"> <span class="muted">Loading</span> </div>
+          <div class="pos-mv" style="text-align:right"> <span class="muted">—</span> </div>
+          <div style="display:flex; gap:8px; align-items:center; justify-content:flex-end;">
+            <div class="pos-pl muted">—</div>
+            <div><button class="secondary" data-action="refresh">↻</button> <button class="danger" data-action="delete">Delete</button></div>
+          </div>
         </div>
-        ${sorted.map(it => {
-          const p = it.p;
-          const latestText = it.latest != null ? formatCurrency(it.latest) : '—';
-          const mvText = it.marketValue != null ? formatCurrency(it.marketValue) : '—';
-          const cost = p.shares * (p.avgCost || 0);
-          const pl = (it.marketValue != null ? it.marketValue : 0) - cost;
-          const plText = formatCurrency(pl);
-          const plClass = pl >= 0 ? 'positive' : 'negative';
-          return `
-            <div class="item-row" data-id="${p.id}" style="display:grid; grid-template-columns: 1fr 120px 120px 140px; gap:12px; align-items:center; padding:8px 0; border-bottom:1px solid rgba(148,163,184,0.04);">
-              <div style="display:flex; gap:12px; align-items:center;"><span class="badge">${p.symbol}</span><div><div><strong>${p.symbol}</strong> · ${p.shares} sh</div><div class="muted">Avg ${formatCurrency(p.avgCost)} · ${p.account}</div></div></div>
-              <div style="text-align:right">${latestText}</div>
-              <div style="text-align:right">${mvText}</div>
-              <div style="display:flex; gap:8px; align-items:center; justify-content:flex-end;"><div class="${plClass}">${plText}</div><div><button class="secondary" data-action="refresh">↻</button> <button class="danger" data-action="delete">Delete</button></div></div>
-            </div>`;
-        }).join('')}
-      `;
-      // Attach handlers
-      container.querySelectorAll('.item-row').forEach(row => {
-        const id = Number(row.getAttribute('data-id'));
-        row.querySelector('[data-action="delete"]').addEventListener('click', async () => {
-          if (!confirm('Delete this position?')) return;
-          await deletePosition(id);
-          __positionsCache = __positionsCache.filter(x => x.id !== id);
-          renderPositionsList();
-          showToast('Deleted');
-        });
-        row.querySelector('[data-action="refresh"]').addEventListener('click', async () => {
-          renderPositionsList();
-        });
+      `).join('')}
+    `;
+    container.innerHTML = rowsHtml;
+    // Attach handlers (delete/refresh)
+    container.querySelectorAll('.item-row').forEach(row => {
+      const id = Number(row.getAttribute('data-id'));
+      row.querySelector('[data-action="delete"]').addEventListener('click', async () => {
+        if (!confirm('Delete this position?')) return;
+        await deletePosition(id);
+        __positionsCache = __positionsCache.filter(x => x.id !== id);
+        renderPositionsList();
+        showToast('Deleted');
       });
-    }).catch(err => {
-      console.error('Render positions failed', err);
-      container.innerHTML = '<p class="muted">Failed to load prices</p>';
+      row.querySelector('[data-action="refresh"]').addEventListener('click', async () => {
+        // refresh this row's price
+        const sym = row.getAttribute('data-symbol');
+        const priceEl = row.querySelector('.pos-price');
+        const mvEl = row.querySelector('.pos-mv');
+        const plEl = row.querySelector('.pos-pl');
+        try {
+          priceEl.innerHTML = '<span class="muted">Loading</span>';
+          const q = await fetchQuote(sym);
+          const latest = q && q.current != null ? q.current : null;
+          const pos = __positionsCache.find(p=>p.id===id);
+          const mv = latest != null && pos ? (latest * pos.shares) : null;
+          priceEl.textContent = latest != null ? formatCurrency(latest) : '—';
+          mvEl.textContent = mv != null ? formatCurrency(mv) : '—';
+          const cost = pos ? (pos.shares * (pos.avgCost || 0)) : 0;
+          const pl = (mv != null ? mv : 0) - cost;
+          plEl.textContent = formatCurrency(pl);
+          plEl.className = pl >= 0 ? 'positive' : 'negative';
+        } catch (err) { console.error('Row refresh failed', err); priceEl.innerHTML = '<span class="muted">Error</span>'; }
+      });
     });
+    // Now fetch prices for all positions in parallel and update rows
+    Promise.all(__positionsCache.map(async (p) => {
+      try {
+        const q = await fetchQuote(p.symbol);
+        return { id: p.id, symbol: p.symbol, q };
+      } catch (e) { return { id: p.id, symbol: p.symbol, q: null }; }
+    })).then(results => {
+      for (const r of results){
+        const row = container.querySelector(`.item-row[data-id="${r.id}"]`);
+        if (!row) continue;
+        const priceEl = row.querySelector('.pos-price');
+        const mvEl = row.querySelector('.pos-mv');
+        const plEl = row.querySelector('.pos-pl');
+        const pos = __positionsCache.find(x=>x.id===r.id);
+        const latest = r.q && r.q.current != null ? r.q.current : null;
+        const mv = latest != null && pos ? (latest * pos.shares) : null;
+        priceEl.textContent = latest != null ? formatCurrency(latest) : '—';
+        mvEl.textContent = mv != null ? formatCurrency(mv) : '—';
+        const cost = pos ? (pos.shares * (pos.avgCost || 0)) : 0;
+        const pl = (mv != null ? mv : 0) - cost;
+        plEl.textContent = formatCurrency(pl);
+        plEl.className = pl >= 0 ? 'positive' : 'negative';
+      }
+    }).catch(err => { console.error('Update positions prices failed', err); }).finally(()=>{
+      // After updating visible prices, refresh portfolio allocation chart
+      try { renderPortfolioAllocationChart(); } catch(e){ console.warn('Allocation chart update failed', e); }
+    });
+  }
+
+  // Render portfolio allocation (sector breakdown) into doughnut chart + legend
+  let allocationChart = null;
+  async function renderPortfolioAllocationChart(){
+    const canvas = document.getElementById('portfolio-allocation-chart');
+    const legendEl = document.getElementById('allocation-legend');
+    if (!canvas || !legendEl) return;
+    if (!__positionsCache || __positionsCache.length===0){ legendEl.innerHTML = '<div class="muted">No positions</div>'; if (allocationChart){ allocationChart.data.labels = []; allocationChart.data.datasets[0].data = []; allocationChart.update(); } return; }
+    // compute market values per position
+    const mvBySector = {};
+    let total = 0;
+    await Promise.all(__positionsCache.map(async (p)=>{
+      try {
+        const q = await fetchQuote(p.symbol).catch(()=>null);
+        const price = q && q.current != null ? q.current : (q && q.c != null ? q.c : null);
+        const mv = price != null ? price * p.shares : (p.shares * (p.avgCost||0));
+        const prof = await fetchProfile(p.symbol).catch(()=>null);
+        const sector = (prof && prof.finnhubIndustry) || (prof && prof.sector) || 'Other';
+        mvBySector[sector] = (mvBySector[sector] || 0) + (mv || 0);
+        total += (mv || 0);
+      } catch (e) { console.warn('Allocation compute failed for', p.symbol, e); }
+    }));
+    const labels = Object.keys(mvBySector).sort((a,b)=>mvBySector[b]-mvBySector[a]);
+    const data = labels.map(l => Math.round((mvBySector[l]||0)*100)/100);
+    // colors
+    const colors = labels.map((_,i)=>['#60a5fa','#34d399','#f97316','#f43f5e','#a78bfa','#f59e0b','#06b6d4','#ef4444','#10b981','#7c3aed'][i%10]);
+    // render chart
+    try {
+      const ctx = canvas.getContext('2d');
+      if (!allocationChart) {
+        allocationChart = new Chart(ctx, { type: 'doughnut', data: { labels, datasets: [{ data, backgroundColor: colors }] }, options: { responsive: true, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx)=> `${ctx.label}: ${formatCurrency(ctx.parsed)}` } } } } });
+      } else { allocationChart.data.labels = labels; allocationChart.data.datasets[0].data = data; allocationChart.data.datasets[0].backgroundColor = colors; allocationChart.update(); }
+    } catch (e) { console.error('Render allocation chart failed', e); }
+    // build legend
+    legendEl.innerHTML = labels.map((l,idx)=>{
+      const val = mvBySector[l]||0; const pct = total>0? Math.round((val/total)*100):0;
+      return `<div style="display:flex; gap:8px; align-items:center; margin-bottom:6px;"><div style="width:12px; height:12px; background:${colors[idx]}; border-radius:2px;"></div><div><strong>${l}</strong> <span class="muted">${formatCurrency(val)} · ${pct}%</span></div></div>`;
+    }).join('');
   }
 
   function initStocksPage(){
@@ -485,7 +666,26 @@
         // check proxy quickly
         await checkProxyStatus();
         const res = await apiFetch(`/api/search?q=${encodeURIComponent(q)}`);
-        if (!res || !res.result || !Array.isArray(res.result) || res.result.length === 0) { showToast('No results'); renderSearchResults([]); return; }
+        if (!res) {
+          // likely proxy/network error
+          const container = document.getElementById('stock-search-result');
+          if (container) container.innerHTML = `<div class="muted">Search failed — proxy/network error. Check proxy status (top-right) and make sure the proxy is running at http://localhost:9999.</div>`;
+          showToast('Search failed — proxy error');
+          return;
+        }
+        if (!res.result || !Array.isArray(res.result) || res.result.length === 0) {
+          // Try direct quote if the user input looks like a ticker symbol (fast path)
+          const maybeSym = q.toUpperCase();
+          if (/^[A-Z.\-]{1,6}$/.test(maybeSym)) {
+            const directQuote = await fetchQuote(maybeSym).catch(()=>null);
+            if (directQuote && (directQuote.current != null || directQuote.prevClose != null)) {
+              renderStockSearchResult(maybeSym, directQuote);
+              try { await renderStockChart(maybeSym, 90); } catch (_) {}
+              return;
+            }
+          }
+          showToast('No results'); renderSearchResults([]); return;
+        }
         const choices = res.result.slice(0,5);
         // fetch quotes for each candidate in parallel to show prices inline
         const withPrices = await Promise.all(choices.map(async (r) => {

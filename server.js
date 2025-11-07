@@ -59,6 +59,14 @@ app.get('/api/search', (req, res) => {
   proxyFetch(url, res);
 });
 
+// Company profile: /api/profile?symbol=AAPL -> proxies finnhub /stock/profile2
+app.get('/api/profile', (req, res) => {
+  const symbol = (req.query.symbol || '').toUpperCase();
+  if (!symbol) return res.status(400).json({ error: 'Missing symbol' });
+  const url = `https://finnhub.io/api/v1/stock/profile2?symbol=${encodeURIComponent(symbol)}&token=${API_KEY}`;
+  proxyFetch(url, res);
+});
+
 // Historical candles: /api/history?symbol=AAPL&from=1609459200&to=1640995200&resolution=D
 app.get('/api/history', (req, res) => {
   const symbol = req.query.symbol;

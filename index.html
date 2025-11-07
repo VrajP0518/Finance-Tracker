@@ -289,9 +289,33 @@
               <div id="positions-controls" style="margin-bottom:8px; display:flex; gap:8px; align-items:center;"></div>
               <div id="positions-list" style="margin-top:8px;"></div>
             </div>
+            <div class="card" style="margin-top:12px; padding:12px;">
+              <h4>Portfolio Allocation</h4>
+              <div style="display:flex; gap:12px; align-items:center;">
+                <canvas id="portfolio-allocation-chart" height="120" style="max-width:260px;"></canvas>
+                <div id="allocation-legend" style="font-size:13px;"></div>
+              </div>
+            </div>
           </div>
         </div>
       </section>
+
+      <!-- Add from search modal -->
+      <div id="add-from-search-modal" class="modal" style="display:none;">
+        <div class="modal-content">
+          <div class="card-header"><h3>Add Position</h3><button class="secondary" id="close-add-from-search">✕</button></div>
+          <form id="add-from-search-form" class="form-grid" style="margin-top:12px;">
+            <label>Symbol <input id="afs-symbol" type="text" readonly /></label>
+            <label>Shares <input id="afs-shares" type="number" step="0.0001" value="1" required /></label>
+            <label>Avg Cost <input id="afs-avgcost" type="number" step="0.01" required /></label>
+            <label>Account <input id="afs-account" type="text" value="Broker" /></label>
+            <div style="display:flex; gap:8px;">
+              <button type="submit" class="primary">Add Position</button>
+              <button type="button" class="secondary" id="afs-cancel">Cancel</button>
+            </div>
+          </form>
+        </div>
+      </div>
 
       <section id="view-items" class="view">
         <div class="card">
