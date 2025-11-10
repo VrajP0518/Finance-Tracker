@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Finance Tracker</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="manifest" href="manifest.webmanifest">
+  </head>
+  <body>
+    <header class="app-header">
+      <h1>Finance Tracker</h1>
+      <div class="spacer"></div>
+      <button id="toggle-theme" aria-label="Toggle dark mode">🌙</button>
+    </header>
+
+    <nav class="app-nav">
+      <button data-view="dashboard" class="nav-btn active">Dashboard</button>
+  <button data-view="items" class="nav-btn">Items</button>
+  <button data-view="stocks" class="nav-btn">Stocks</button>
+  <button data-view="transactions" class="nav-btn">Transactions</button>
+      <button data-view="accounts" class="nav-btn">Accounts</button>
+      <button data-view="settings" class="nav-btn">Settings</button>
+    </nav>
+
+    <main id="view-container" class="view-container">
+      <section id="view-dashboard" class="view active">
+        <div class="card">
+          <div class="card-header">
+            <h2>Net Worth</h2>
+            <div class="range-controls">
+              <button class="range-btn" data-range="3m">3M</button>
+              <button class="range-btn active" data-range="12m">1Y</button>
+              <button class="range-btn" data-range="ytd">YTD</button>
+              <button class="range-btn" data-range="all">All</button>
+            </div>
+          </div>
+          <canvas id="networth-chart" height="120"></canvas>
+        </div>
+
+        <div class="grid three" style="margin-top: 16px;">
+          <div class="card">
+            <div class="card-header"><h3>Current Net Worth</h3></div>
+            <div id="current-networth" class="stat-value">$0</div>
+          </div>
+          <div class="card">
+            <div class="card-header"><h3>Total Assets</h3></div>
+            <div id="total-assets" class="stat-value positive">$0</div>
+          </div>
+          <div class="card">
+            <div class="card-header"><h3>Total Liabilities</h3></div>
+            <div id="total-liabilities" class="stat-value negative">$0</div>
+          </div>
+        </div>
+
+        <div class="grid two">
+          <div class="card">
+            <div class="card-header"><h3>Add Manual Asset/Liability</h3></div>
+            <form id="valuation-form" class="form-grid">
+              <label>
+                Type
+                <select id="valuation-type">
+                  <option value="asset">Asset</option>
+                  <option value="liability">Liability</option>
+                </select>
+              </label>
+              <label>
+                Name
+                <input id="valuation-name" type="text" placeholder="House / Car / Loan" required />
+              </label>
+              <label>
+                Value
+                <input id="valuation-value" type="number" step="0.01" placeholder="100000" required />
+              </label>
+              <label>
+                Date
+                <input id="valuation-date" type="date" required />
+              </label>
+              <button type="submit" class="primary">Save</button>
+            </form>
+          </div>
+
+          <div class="card">
+            <div class="card-header"><h3>Quick Add Transaction</h3></div>
+            <div style="display: grid; gap: 8px;">
+              <form id="quick-transaction-form" class="form-grid">
+                <label>
+                  Date
+                  <input id="quick-transaction-date" type="date" required />
+                </label>
+                <label>
+                  Amount
+                  <input id="quick-transaction-amount" type="number" step="0.01" placeholder="-25.00" required />
+                </label>
+                <label>
+                  Description
+                  <input id="quick-transaction-description" type="text" placeholder="Grocery" required />
+                </label>
+                <label>
+                  Category
+                  <select id="quick-transaction-category">
+                    <option value="Food">Food</option>
+                    <option value="Gas">Gas</option>
+                    <option value="Entertainment">Entertainment</option>
+                    <option value="Income">Income</option>
+                    <option value="Other">Other</option>
+                  </select>
+                </label>
+                <label>
+                  Account
+                  <input id="quick-transaction-account" type="text" placeholder="Checking" />
+                </label>
+                <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+                  <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                    <button type="button" class="quick-cat-btn secondary" data-cat="Food">Food</button>
+                    <button type="button" class="quick-cat-btn secondary" data-cat="Gas">Gas</button>
+                    <button type="button" class="quick-cat-btn secondary" data-cat="Entertainment">Entertainment</button>
+                    <button type="button" class="quick-cat-btn secondary" data-cat="Income">Income</button>
+                  </div>
+                  <div style="margin-left:auto;">
+                    <button type="submit" class="primary">Add</button>
+                  </div>
+                </div>
+              </form>
+              <div class="muted">Quick-add common transactions from the dashboard. Use the Category shortcuts for speed.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top: 16px;">
+          <div class="card-header">
+            <h3>Recently added</h3>
+            <button id="refresh-recent" class="range-btn">Refresh</button>
+          </div>
+          <ul id="recent-list" class="recent-list"></ul>
+        </div>
+
+        <div class="card" style="margin-top: 16px;">
+          <div class="card-header"><h3>Top Positions</h3></div>
+          <div id="dashboard-top-positions" style="padding:12px">No positions</div>
+        </div>
+      </section>
+
+      <section id="view-transactions" class="view">
+        <div class="card">
+          <div class="card-header">
+            <h2>Transactions</h2>
+            <div style="display: flex; gap: 8px;">
+              <button id="import-csv-btn" class="secondary">Import CSV</button>
+              <button id="add-transaction-btn" class="primary">Add Transaction</button>
+            </div>
+          </div>
+          <div style="margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap;">
+            <input id="transaction-search" type="text" placeholder="Search transactions..." style="flex: 1; min-width: 200px; background: transparent; color: var(--text); border: 1px solid var(--border); padding: 8px; border-radius: 8px;" />
+            <select id="transaction-category-filter" style="background: transparent; color: var(--text); border: 1px solid var(--border); padding: 8px; border-radius: 8px;">
+              <option value="">All Categories</option>
+            </select>
+          </div>
+          <div id="transactions-list" class="transactions-list" style="margin-top: 12px;"></div>
+        </div>
+
+        <!-- Add Transaction Modal -->
+        <div id="add-transaction-modal" class="modal" style="display: none;">
+          <div class="modal-content">
+            <div class="card-header">
+              <h3>Add Transaction</h3>
+              <button class="secondary" id="close-transaction-modal">✕</button>
+            </div>
+            <form id="transaction-form" class="form-grid" style="margin-top: 12px;">
+              <label>
+                Date
+                <input id="transaction-date" type="date" required />
+              </label>
+              <label>
+                Amount
+                <input id="transaction-amount" type="number" step="0.01" placeholder="-50.00" required />
+              </label>
+              <label>
+                Description
+                <input id="transaction-description" type="text" placeholder="Grocery shopping" required />
+              </label>
+              <label>
+                Category
+                <input id="transaction-category" type="text" placeholder="Food" list="category-list" />
+                <datalist id="category-list"></datalist>
+              </label>
+              <label>
+                Account
+                <input id="transaction-account" type="text" placeholder="Checking" />
+              </label>
+              <label>
+                Notes
+                <textarea id="transaction-notes" placeholder="Optional notes..." style="min-height: 60px;"></textarea>
+              </label>
+              <button type="submit" class="primary">Save</button>
+            </form>
+          </div>
+        </div>
+
+        <!-- CSV Import Modal -->
+        <div id="csv-import-modal" class="modal" style="display: none;">
+          <div class="modal-content" style="max-width: 800px; max-height: 90vh; overflow-y: auto;">
+            <div class="card-header">
+              <h3>Import CSV</h3>
+              <button class="secondary" id="close-csv-modal">✕</button>
+            </div>
+            <div style="margin-top: 12px;">
+              <label style="display: block; margin-bottom: 8px;">
+                Select CSV File
+                <input id="csv-file-input" type="file" accept=".csv" style="margin-top: 4px; display: block; width: 100%;" />
+              </label>
+              <div id="csv-mapping" style="margin-top: 16px; display: none;">
+                <h4>Map Columns</h4>
+                <div id="column-mapping" class="form-grid"></div>
+                <div style="margin-top: 12px;">
+                  <button id="preview-csv" class="primary">Preview</button>
+                </div>
+              </div>
+              <div id="csv-preview" style="margin-top: 16px; display: none;">
+                <h4>Preview (first 10 rows)</h4>
+                <div style="overflow-x: auto; max-height: 300px;">
+                  <table id="preview-table" style="width: 100%; border-collapse: collapse; font-size: 12px;">
+                  </table>
+                </div>
+                <div style="margin-top: 12px; display: flex; gap: 8px;">
+                  <button id="import-csv-data" class="primary">Import All</button>
+                  <button id="cancel-csv" class="secondary">Cancel</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="view-accounts" class="view">
+        <div class="card">
+          <div class="card-header"><h2>Accounts</h2></div>
+          <p>Coming soon. Manage accounts and balances.</p>
+        </div>
+      </section>
+
+      <!-- Stocks / Portfolio view -->
+      <section id="view-stocks" class="view">
+        <div class="card">
+          <div class="card-header">
+            <h2>Stocks & Portfolio</h2>
+            <div style="display:flex; gap:8px; align-items:center;">
+              <input id="stock-search-input" type="text" placeholder="Search symbols (e.g. AAPL)" style="background: transparent; color: var(--text); border: 1px solid var(--border); padding: 8px; border-radius: 8px;" />
+              <button id="stock-search-btn" class="secondary">Search</button>
+              <span id="proxy-status" title="Proxy status" style="margin-left:8px; font-size:12px; color:var(--muted);">Proxy: unknown</span>
+            </div>
+            <div id="stock-search-result" style="margin-top:8px; color:var(--text);"></div>
+          </div>
+          <div style="margin-top:12px; display:grid; gap:12px;">
+            <div style="display:flex; gap:12px; align-items:center;">
+              <button id="build-history-btn" class="secondary">Build History</button>
+              <div class="muted" style="font-size:13px;">(Fetch historical prices for portfolio history chart — may take a few seconds)</div>
+            </div>
+            <div class="card" style="padding:12px;">
+              <h4>MY CONTRIBUTIONS</h4>
+              <canvas id="stocks-portfolio-chart" height="100"></canvas>
+            </div>
+            <form id="add-position-form" class="form-grid" style="grid-template-columns: 1fr 1fr 1fr; gap:8px; align-items:end;">
+              <label>
+                Symbol
+                <input id="position-symbol" type="text" placeholder="AAPL" required />
+              </label>
+              <label>
+                Shares
+                <input id="position-shares" type="number" step="0.0001" placeholder="1.5" required />
+              </label>
+              <label>
+                Avg Cost
+                <input id="position-avgcost" type="number" step="0.01" placeholder="150.00" required />
+              </label>
+              <label>
+                Account
+                <input id="position-account" type="text" placeholder="Broker" />
+              </label>
+              <div></div>
+              <div style="display:flex; gap:8px;">
+                <button type="submit" class="primary">Add Position</button>
+                <button type="button" id="refresh-prices" class="secondary">Refresh Prices</button>
+              </div>
+            </form>
+
+            <div>
+              <h4>Positions</h4>
+              <div id="positions-controls" style="margin-bottom:8px; display:flex; gap:8px; align-items:center;"></div>
+              <div id="positions-list" style="margin-top:8px;"></div>
+            </div>
+            <div class="card" style="margin-top:12px; padding:12px;">
+              <h4>Portfolio Allocation</h4>
+              <div style="display:flex; gap:12px; align-items:center;">
+                <canvas id="portfolio-allocation-chart" height="120" style="max-width:260px;"></canvas>
+                <div id="allocation-legend" style="font-size:13px;"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Add from search modal -->
+      <div id="add-from-search-modal" class="modal" style="display:none;">
+        <div class="modal-content">
+          <div class="card-header"><h3>Add Position</h3><button class="secondary" id="close-add-from-search">✕</button></div>
+          <form id="add-from-search-form" class="form-grid" style="margin-top:12px;">
+            <label>Symbol <input id="afs-symbol" type="text" readonly /></label>
+            <label>Shares <input id="afs-shares" type="number" step="0.0001" value="1" required /></label>
+            <label>Avg Cost <input id="afs-avgcost" type="number" step="0.01" required /></label>
+            <label>Account <input id="afs-account" type="text" value="Broker" /></label>
+            <div style="display:flex; gap:8px;">
+              <button type="submit" class="primary">Add Position</button>
+              <button type="button" class="secondary" id="afs-cancel">Cancel</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <section id="view-items" class="view">
+        <div class="card">
+          <div class="card-header"><h2>All Items</h2></div>
+          <div id="items-list" class="items-list"></div>
+        </div>
+      </section>
+
+      <section id="view-settings" class="view">
+        <div class="card">
+          <div class="card-header"><h2>Settings</h2></div>
+          <p>Backup/restore and encryption (later).</p>
+        </div>
+      </section>
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script src="js/app.bundle.js"></script>
+  </body>
+  </html>
+
+
